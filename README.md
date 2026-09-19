@@ -21,7 +21,7 @@ flowchart LR
   kyverno --> cluster[demo namespace]
 ```
 
-On a pull request the last two jobs are skipped (no image publish, no GitOps write). SonarCloud is skipped until `SONAR_TOKEN` exists.
+On a pull request the GitOps bump job is skipped (no image publish path that needs a tag write). SonarCloud and the GitOps bump still *appear* in the graph on `main`; they no-op with a log line until `SONAR_TOKEN` / `GITOPS_TOKEN` are set.
 
 ## Local run
 
