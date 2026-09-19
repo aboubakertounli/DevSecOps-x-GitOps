@@ -60,13 +60,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: aquasecurity/trivy-action@v0.32.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
+      - name: Trivy filesystem scan
+        run: >
+          docker run --rm
+          -v "$PWD:/src"
+          aquasec/trivy:0.65.0
+          fs /src
+          --severity HIGH,CRITICAL
+          --ignore-unfixed
+          --exit-code 1
 
   build-image:
     name: build-scan-push
@@ -92,13 +94,15 @@ jobs:
           tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - uses: aquasecurity/trivy-action@v0.32.0
-        with:
-          scan-type: image
-          image-ref: ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
+      - name: Trivy image scan
+        run: >
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          aquasec/trivy:0.65.0
+          image ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+          --severity HIGH,CRITICAL
+          --ignore-unfixed
+          --exit-code 1
       - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v6
         with:
