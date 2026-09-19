@@ -9,6 +9,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: write
+
 env:
   IMAGE: ghcr.io/aboubakertounli/devsecops-x-gitops
   GITOPS_REPO: aboubakertounli/DevSecOps-x-GitOps-gitops
@@ -29,13 +33,24 @@ jobs:
   sonarcloud:
     name: sast-sonarcloud
     needs: unit-tests
-    if: ${{ secrets.SONAR_TOKEN != '' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - id: creds
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "SONAR_TOKEN is not set; skipping SonarCloud."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.creds.outputs.present == 'true'
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: SonarSource/sonarqube-scan-action@v5
+      - if: steps.creds.outputs.present == 'true'
+        uses: SonarSource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
@@ -57,11 +72,7 @@ jobs:
     name: build-scan-push
     needs: [unit-tests, trivy-fs]
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     outputs:
-      digest: ${{ steps.push.outputs.digest }}
       tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
@@ -74,8 +85,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: build
-        uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v6
         with:
           context: .
           load: true
@@ -89,8 +99,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      - id: push
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -104,22 +113,36 @@ jobs:
   bump-gitops:
     name: bump-gitops-tag
     needs: build-image
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.GITOPS_TOKEN != '' }}
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - id: creds
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+        run: |
+          if [ -z "$GITOPS_TOKEN" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "GITOPS_TOKEN is not set; skipping GitOps tag bump."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.creds.outputs.present == 'true'
+        uses: actions/checkout@v4
         with:
           repository: ${{ env.GITOPS_REPO }}
           token: ${{ secrets.GITOPS_TOKEN }}
           path: gitops
-      - name: Install kustomize
+      - if: steps.creds.outputs.present == 'true'
+        name: Install kustomize
         run: |
           curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz" | tar xz
           sudo mv kustomize /usr/local/bin/
-      - name: Set image tag
+      - if: steps.creds.outputs.present == 'true'
+        name: Set image tag
         working-directory: gitops/${{ env.GITOPS_PATH }}
         run: kustomize edit set image ${{ env.IMAGE }}:${{ needs.build-image.outputs.tag }}
-      - name: Commit and push
+      - if: steps.creds.outputs.present == 'true'
+        name: Commit and push
         working-directory: gitops
         run: |
           git config user.name "github-actions[bot]"
