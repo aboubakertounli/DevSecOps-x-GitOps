@@ -1,59 +1,63 @@
 # DevSecOps x GitOps (app + CI)
 
-Small Express CRUD API. The application is the payload for a GitHub Actions pipeline that tests, SAST-scans, container-scans, publishes to GHCR, then **bumps an image tag in a separate GitOps repo**. CI never talks to the cluster.
+Express CRUD API. After `git push`, this repo's GitHub Actions pipeline tests, scans, publishes an image to GHCR, then **commits a new tag in a second repo**. It never talks to Kubernetes.
 
-Companion repos:
+- Desired state (Deployment, Prometheus, Grafana, Kyverno, Argo CD apps): [DevSecOps-x-GitOps-gitops](https://github.com/aboubakertounli/DevSecOps-x-GitOps-gitops)
+- Portfolio: [portfolio](https://github.com/aboubakertounli/portfolio)
 
-- Config / desired state: [DevSecOps-x-GitOps-gitops](https://github.com/aboubakertounli/DevSecOps-x-GitOps-gitops)
-- Portfolio case study: [portfolio](https://github.com/aboubakertounli/portfolio)
-
-## What CI does
+## After `git push` on `main`
 
 ```mermaid
-flowchart LR
-  push[GitHub push or PR] --> tests[unit-tests]
-  tests --> sonar[sast-sonarcloud]
-  tests --> fs[scan-filesystem Trivy]
-  fs --> image[build-scan-push]
-  image --> gitops[bump-gitops-tag]
-  gitops --> argocd[Argo CD in kind]
-  argocd --> kyverno[Kyverno]
-  kyverno --> cluster[demo namespace]
+flowchart TB
+  push["git push this repo"] --> tests[unit-tests]
+  tests --> sonar["sast-sonarcloud — no-op without SONAR_TOKEN"]
+  tests --> fs["trivy fs HIGH/CRITICAL"]
+  fs --> image["docker build + trivy image + push GHCR"]
+  image --> bump["kustomize edit set image in gitops repo"]
+  bump --> gitopsCommit["commit on DevSecOps-x-GitOps-gitops"]
+  gitopsCommit --> argo["Argo CD reconcile — not CI"]
+  argo --> kyverno["Kyverno admit/deny Pod"]
+  kyverno --> pod["demo Pod runs new tag"]
+  pod --> prom["Prometheus scrape /metrics"]
+  prom --> graf["Grafana Demo API dashboard"]
 ```
 
-On a pull request the GitOps bump job is skipped (no image publish path that needs a tag write). SonarCloud and the GitOps bump still *appear* in the graph on `main`; they no-op with a log line until `SONAR_TOKEN` / `GITOPS_TOKEN` are set.
+The last four boxes are **in the cluster**, driven by git, not by a deploy job. `bump-gitops-tag` no-ops until `GITOPS_TOKEN` exists (fine-grained PAT, Contents read/write on `aboubakertounli/DevSecOps-x-GitOps-gitops` only). Set it under this repo → Settings → Secrets and variables → Actions.
 
-## Local run
+PRs stop after the image scan. They do not push GHCR or touch GitOps.
+
+## The metrics Prometheus actually scrapes
+
+`GET /metrics` is Prometheus text. `prom-client` exports Node defaults plus:
+
+- `http_requests_total{method,route,status}`
+- `http_request_duration_seconds{method,route,status}`
+
+On the cluster, scrape is **not** hardcoded to a hostname. `apps/demo/deployment.yaml` has:
+
+```yaml
+prometheus.io/scrape: "true"
+prometheus.io/port: "8080"
+prometheus.io/path: /metrics
+```
+
+Prometheus in `apps/observability` uses `kubernetes_sd_configs` (role: pod) and keeps only pods with that annotation.
+
+## Local process (no cluster)
 
 ```bash
 npm ci
 npm test
 npm start
 # http://127.0.0.1:8080/healthz
-# http://127.0.0.1:8080/items
 # http://127.0.0.1:8080/metrics
-```
-
-```bash
-docker build -t ghcr.io/aboubakertounli/devsecops-x-gitops:local .
-docker run --rm -p 8080:8080 ghcr.io/aboubakertounli/devsecops-x-gitops:local
 ```
 
 ## GitHub Actions secrets
 
-Set these on this repository (`Settings → Secrets and variables → Actions`):
-
-| Secret | Required for | How to create |
+| Secret | Job | Purpose |
 | --- | --- | --- |
-| `SONAR_TOKEN` | `sast-sonarcloud` job | [SonarCloud](https://sonarcloud.io) → import this GitHub repo → account → generate token |
-| `GITOPS_TOKEN` | `bump-gitops-tag` job | Fine-grained PAT: Contents **read/write** on `aboubakertounli/DevSecOps-x-GitOps-gitops` only |
+| `GITOPS_TOKEN` | `bump-gitops-tag` | Push the image tag to the GitOps repo |
+| `SONAR_TOKEN` | `sast-sonarcloud` | Optional SAST |
 
-`GITHUB_TOKEN` is enough to push images to GHCR. After the first successful `main` build, set the package visibility to **public** under GitHub → Packages so kind/Argo CD can pull without a pull secret.
-
-## Watch the workflow graph
-
-1. Open [Actions](https://github.com/aboubakertounli/DevSecOps-x-GitOps/actions)
-2. Click the latest **ci** run
-3. The job graph is the left-hand summary (boxes + arrows from `needs:`)
-
-Until Argo CD runs on a local kind cluster, the pipeline stops at “new tag committed in the GitOps repo.”
+`GITHUB_TOKEN` already pushes images to GHCR. The package must be **public** (GitHub → Packages → `devsecops-x-gitops` → Package settings) so kind can pull without a pull secret.

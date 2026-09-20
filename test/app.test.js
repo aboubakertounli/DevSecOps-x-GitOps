@@ -72,4 +72,5 @@ test("exposes Prometheus metrics", async () => {
   const body = await res.text();
   assert.equal(res.status, 200);
   assert.match(body, /http_requests_total/);
+  assert.match(body, /http_request_duration_seconds/);
 });
